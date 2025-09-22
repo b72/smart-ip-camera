@@ -21,6 +21,7 @@ import paho.mqtt.client as mqtt
 import subprocess
 import sys
 
+
 class AttendanceConfig:
     """Configuration for attendance system"""
     def __init__(self):
@@ -1435,7 +1436,10 @@ class AttendanceUI:
         style.configure('Info.TLabel', background='#1e1e2e', foreground='#a6adc8', font=('Arial', 10))
         
         self.config = AttendanceConfig()
-        self.face_app = FaceAnalysis(allowed_modules=['detection', 'recognition'])
+        self.face_app = FaceAnalysis(
+            providers=["CoreMLExecutionProvider"],
+            allowed_modules=["detection", "recognition"]
+        )
         self.face_app.prepare(ctx_id=0, det_size=(640, 640))
         
         self.employee_manager = EmployeeManager(self.config, self.face_app)
