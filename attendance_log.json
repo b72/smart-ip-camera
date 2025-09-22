@@ -1,0 +1,32 @@
+{
+  "emp03": {
+    "employee_id": "emp03",
+    "last_clock_in": "2025-09-22T16:29:23.594517",
+    "total_clockins": 750
+  },
+  "emp01": {
+    "employee_id": "emp01",
+    "last_clock_in": "2025-09-22T17:24:22.489263",
+    "total_clockins": 158
+  },
+  "emp04": {
+    "employee_id": "emp04",
+    "last_clock_in": "2025-09-22T15:22:11.190176",
+    "total_clockins": 30
+  },
+  "director_admin": {
+    "employee_id": "director_admin",
+    "last_clock_in": "2025-09-22T16:28:50.670090",
+    "total_clockins": 213
+  },
+  "emp02": {
+    "employee_id": "emp02",
+    "last_clock_in": "2025-09-22T17:26:25.791012",
+    "total_clockins": 33
+  },
+  "emp05": {
+    "employee_id": "emp05",
+    "last_clock_in": "2025-09-22T17:25:46.612266",
+    "total_clockins": 38
+  }
+}

@@ -1,0 +1,22 @@
+{
+  "API_ENDPOINT": "",
+  "API_KEY": "",
+  "ATTENDANCE_LOG": "attendance_log.json",
+  "CAMERA_INDEX": 0,
+  "CONFIG_FILE": "config.json",
+  "DETECTION_CONFIDENCE": 0.5,
+  "EMBEDDINGS_CACHE": "embeddings_cache.pkl",
+  "EMPLOYEES_DIR": "employees",
+  "ENABLE_API": false,
+  "ENABLE_MQTT": true,
+  "MAX_FACE_SIZE": 512,
+  "MODE": "everytime",
+  "MQTT_BROKER": "127.0.0.1",
+  "MQTT_PASSWORD": "",
+  "MQTT_PORT": 1883,
+  "MQTT_TOPIC": "attendance/clockin",
+  "MQTT_USERNAME": "",
+  "SIMILARITY_THRESHOLD": 0.4,
+  "UNKNOWN_DIR": "unknown_faces",
+  "UNKNOWN_FACE_LOGGING": true
+}
