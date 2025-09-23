@@ -21,10 +21,28 @@ import paho.mqtt.client as mqtt
 import subprocess
 import sys
 
+import logging
+from logging.handlers import RotatingFileHandler
+
+# === LOGGER SETUP ===
+logger = logging.getLogger('Real-time-Attendance')
+default_log_level = logging.INFO
+logger.setLevel(default_log_level)
+
+handler = RotatingFileHandler('app.log', maxBytes=1048576, backupCount=5)
+formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+handler.setFormatter(formatter)
+logger.addHandler(handler)
+
 class AttendanceConfig:
     """Configuration for attendance system"""
     def __init__(self):
-        self.MODE = "per_day"  # per_day, per_hour, everytime
+        self.MODEL_NAME = "buffalo_l"  # Model for face recognition
+        self.MODEL_PATH = ""  # Custom model path if any
+        self.EXEC_PROVIDER = ["CPUExecutionProvider"]  # ONNX Runtime providers
+        self.ALLOWED_MODULES = ['detection', 'recognition']
+        self.MODE = "per_day"  # per_day, per_hour, everytime, 100
+        self.CUSTOM_MODE_INTERVAL_IN_SEC = 5  # Used if MODE is custom
         self.SIMILARITY_THRESHOLD = 0.4
         self.UNKNOWN_DIR = "unknown_faces"
         self.EMPLOYEES_DIR = "employees"
@@ -33,7 +51,10 @@ class AttendanceConfig:
         self.CAMERA_INDEX = 0  # Default to first webcam
         self.DETECTION_CONFIDENCE = 0.5
         self.MAX_FACE_SIZE = 512
-        self.UNKNOWN_FACE_LOGGING = True
+        self.UNKNOWN_FACE_LOGGING = False
+        self.MAX_UNKNOWN_FACES = 100
+        self.UNKNOWN_FULL_IMAGE = True
+        self.MAX_UNKNOWN_SAVE_INTERVAL = 10  # seconds
         
         # API/MQTT Settings
         self.API_ENDPOINT = ""
@@ -45,9 +66,14 @@ class AttendanceConfig:
         self.MQTT_PASSWORD = ""
         self.ENABLE_API = False
         self.ENABLE_MQTT = False
+
+        # Logging config
+        self.ENABLE_LOGGING = True
+        self.LOG_LEVEL = "INFO"  # Could be DEBUG, INFO, WARNING, ERROR, CRITICAL
         
         self.CONFIG_FILE = "config.json"
         self.load_config()
+        self.configure_logging()
     
     def load_config(self):
         """Load configuration from file"""
@@ -59,7 +85,7 @@ class AttendanceConfig:
                         if hasattr(self, key):
                             setattr(self, key, value)
             except Exception as e:
-                print(f"Error loading config: {e}")
+                logger.error(f"Error loading config: {e}")
     
     def save_config(self):
         """Save configuration to file"""
@@ -70,6 +96,21 @@ class AttendanceConfig:
         
         with open(self.CONFIG_FILE, 'w') as f:
             json.dump(config_data, f, indent=2)
+            logger.info("Configuration saved")
+
+    def configure_logging(self):
+        """Enable/disable logging and set log level from config"""
+        if not self.ENABLE_LOGGING:
+            logger.disabled = True
+        else:
+            logger.disabled = False
+            # Set log level based on config
+            log_level_str = self.LOG_LEVEL.upper()
+            log_level = getattr(logging, log_level_str, logging.INFO)
+            logger.setLevel(log_level)
+            for h in logger.handlers:
+                h.setLevel(log_level)
+            logger.info(f"Logging enabled at {log_level_str} level")
 
 class NotificationManager:
     """Manages API and MQTT notifications"""
@@ -90,9 +131,9 @@ class NotificationManager:
                     )
                 self.mqtt_client.connect(self.config.MQTT_BROKER, self.config.MQTT_PORT, 60)
                 self.mqtt_client.loop_start()
-                print("MQTT client connected")
+                logger.info("MQTT client connected")
             except Exception as e:
-                print(f"MQTT connection error: {e}")
+                logger.error(f"MQTT connection error: {e}")
     
     def send_attendance_notification(self, employee_data):
         """Send attendance notification via API and/or MQTT"""
@@ -101,7 +142,6 @@ class NotificationManager:
             'timestamp': datetime.now().isoformat(),
             'similarity': float(employee_data.get('similarity', 0))
         }
-        print(f"Sending notification: {notification_data}")
         # Send API notification
         if self.config.ENABLE_API and self.config.API_ENDPOINT:
             threading.Thread(
@@ -131,9 +171,9 @@ class NotificationManager:
                 headers=headers,
                 timeout=5
             )
-            print(f"API notification sent: {response.status_code}")
+            logger.info(f"API notification sent: {response.status_code}")
         except Exception as e:
-            print(f"API notification error: {e}")
+            logger.error(f"API notification error: {e}")
     
     def _send_mqtt_notification(self, data):
         """Send MQTT notification"""
@@ -142,9 +182,9 @@ class NotificationManager:
                 self.config.MQTT_TOPIC, 
                 json.dumps(data)
             )
-            print("MQTT notification sent")
+            logger.info("MQTT notification sent")
         except Exception as e:
-            print(f"MQTT notification error: {e}")
+            logger.error(f"MQTT notification error: {e}")
 
 class EmployeeManager:
     """Manages employee data and embeddings"""
@@ -337,12 +377,13 @@ class AttendanceTracker:
                 with open(self.config.ATTENDANCE_LOG, 'r') as f:
                     self.attendance_log = defaultdict(dict, json.load(f))
             except Exception as e:
-                print(f"Error loading attendance log: {e}")
+                logger.error(f"Error loading attendance log: {e}")
     
     def save_log(self):
         """Save attendance log to file"""
         with open(self.config.ATTENDANCE_LOG, 'w') as f:
             json.dump(dict(self.attendance_log), f, indent=2)
+            logger.info("Attendance log saved")
     
     def can_clock_in(self, employee_id):
         """Check if employee can clock in based on mode"""
@@ -364,6 +405,8 @@ class AttendanceTracker:
             return last_time.date() != now.date()
         elif self.config.MODE == "per_hour":
             return (now - last_time).total_seconds() >= 3600
+        elif self.config.MODE == "custom":
+            return (now - last_time).total_seconds() >= int(self.config.CUSTOM_MODE_INTERVAL_IN_SEC)
         
         return False
     
@@ -439,7 +482,7 @@ class SettingsDialog:
         mode_frame = Frame(parent, bg='#1e1e2e')
         mode_frame.pack(fill=tk.X, padx=20, pady=5)
         
-        for mode in ['per_day', 'per_hour', 'everytime']:
+        for mode in ['per_day', 'per_hour', 'everytime', 'custom']:
             tk.Radiobutton(mode_frame, text=mode.replace('_', ' ').title(), 
                           variable=self.mode_var, value=mode,
                           bg='#1e1e2e', fg='#cdd6f4', selectcolor='#45475a',
@@ -672,6 +715,7 @@ class SettingsDialog:
                 f"Failed to restart application: {str(e)}\n\n"
                 "Please restart manually to apply all changes."
             )
+            logger.error(f"Restart error: {e}")
 
 
 class UnknownFacesDialog:
@@ -725,36 +769,39 @@ class UnknownFacesDialog:
     
     def load_unknown_faces(self):
         """Load and display unknown faces"""
-        # Clear existing widgets
-        for widget in self.scrollable_frame.winfo_children():
-            widget.destroy()
-        
-        if not os.path.exists(self.config.UNKNOWN_DIR):
-            Label(self.scrollable_frame, text="No unknown faces directory found",
-                  bg='#181825', fg='#a6adc8', font=('Arial', 12)).pack(pady=50)
-            return
-        
-        unknown_files = [f for f in os.listdir(self.config.UNKNOWN_DIR) 
-                        if f.lower().endswith(('.jpg', '.jpeg', '.png'))]
-        
-        if not unknown_files:
-            Label(self.scrollable_frame, text="No unknown faces found",
-                  bg='#181825', fg='#a6adc8', font=('Arial', 12)).pack(pady=50)
-            return
-        
-        # Display unknown faces in grid
-        row = 0
-        col = 0
-        max_cols = 4
-        
-        for img_file in sorted(unknown_files, reverse=True):  # Most recent first
-            img_path = os.path.join(self.config.UNKNOWN_DIR, img_file)
-            self.create_unknown_face_widget(img_path, row, col)
+        try:
+            # Clear existing widgets
+            for widget in self.scrollable_frame.winfo_children():
+                widget.destroy()
             
-            col += 1
-            if col >= max_cols:
-                col = 0
-                row += 1
+            if not os.path.exists(self.config.UNKNOWN_DIR):
+                Label(self.scrollable_frame, text="No unknown faces directory found",
+                    bg='#181825', fg='#a6adc8', font=('Arial', 12)).pack(pady=50)
+                return
+            
+            unknown_files = [f for f in os.listdir(self.config.UNKNOWN_DIR) 
+                            if f.lower().endswith(('.jpg', '.jpeg', '.png'))]
+            
+            if not unknown_files:
+                Label(self.scrollable_frame, text="No unknown faces found",
+                    bg='#181825', fg='#a6adc8', font=('Arial', 12)).pack(pady=50)
+                return
+            
+            # Display unknown faces in grid
+            row = 0
+            col = 0
+            max_cols = 4
+            
+            for img_file in sorted(unknown_files, reverse=True):  # Most recent first
+                img_path = os.path.join(self.config.UNKNOWN_DIR, img_file)
+                self.create_unknown_face_widget(img_path, row, col)
+                
+                col += 1
+                if col >= max_cols:
+                    col = 0
+                    row += 1
+        except Exception as e:
+            logger.error(f"Error loading unknown faces: {e}")
     
     def create_unknown_face_widget(self, img_path, row, col):
         """Create widget for unknown face"""
@@ -776,6 +823,7 @@ class UnknownFacesDialog:
         except Exception as e:
             Label(frame, text="Error loading image", bg='#45475a', fg='#f38ba8',
                   font=('Arial', 8)).pack(pady=20)
+            logger.error(f"Error displaying image {img_path}: {e}")
         
         # File info
         filename = os.path.basename(img_path)
@@ -808,23 +856,28 @@ class UnknownFacesDialog:
         tk.Entry(dialog, textvariable=emp_id_var, bg='#45475a', fg='#cdd6f4').pack(pady=5)
         
         def save_employee():
-            emp_id = emp_id_var.get().strip()
-            if emp_id:
-                emp_dir = os.path.join(self.config.EMPLOYEES_DIR, emp_id)
-                os.makedirs(emp_dir, exist_ok=True)
-                
-                # Copy image to employee directory
-                import shutil
-                dest_path = os.path.join(emp_dir, f"photo_1{os.path.splitext(img_path)[1]}")
-                shutil.copy2(img_path, dest_path)
-                
-                # Delete from unknown
-                os.remove(img_path)
-                
-                messagebox.showinfo("Success", f"Employee {emp_id} added successfully!")
-                dialog.destroy()
-                self.load_unknown_faces()
-        
+            try:
+                emp_id = emp_id_var.get().strip()
+                if emp_id:
+                    emp_dir = os.path.join(self.config.EMPLOYEES_DIR, emp_id)
+                    os.makedirs(emp_dir, exist_ok=True)
+                    
+                    # Copy image to employee directory
+                    import shutil
+                    dest_path = os.path.join(emp_dir, f"photo_1{os.path.splitext(img_path)[1]}")
+                    shutil.copy2(img_path, dest_path)
+                    
+                    # Delete from unknown
+                    os.remove(img_path)
+                    
+                    messagebox.showinfo("Success", f"Employee {emp_id} added successfully!")
+                    logger.info(f"Added new employee {emp_id}")
+                    dialog.destroy()
+                    self.load_unknown_faces()
+            except Exception as e:
+                messagebox.showerror("Error", f"Failed to add employee: {e}")
+                logger.error(f"Error adding employee: {e}")
+            
         tk.Button(dialog, text="Save", command=save_employee,
                  bg='#a6e3a1', fg='black').pack(pady=10)
     
@@ -895,46 +948,53 @@ class CameraCaptureDialog:
     
     def update_camera(self):
         """Update camera feed"""
-        if not self.running:
-            return
+        try:
+            if not self.running:
+                return
+                
+            ret, frame = self.cap.read()
+            if ret:
+                # Flip frame horizontally for mirror effect
+                frame = cv2.flip(frame, 1)
+                
+                # Detect faces
+                faces = self.face_app.get(frame)
+                
+                # Draw face rectangles
+                for face in faces:
+                    bbox = face.bbox.astype(int)
+                    x1, y1, x2, y2 = bbox
+                    cv2.rectangle(frame, (x1, y1), (x2, y2), (0, 255, 0), 2)
+                    cv2.putText(frame, "Face Detected", (x1, y1-10), 
+                            cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 2)
+                
+                # Update status
+                if faces:
+                    self.status_label.config(text=f"Face detected! Ready to capture.")
+                else:
+                    self.status_label.config(text="No face detected. Position your face in the camera.")
+                
+                # Convert to PIL and display
+                frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+                img = Image.fromarray(frame_rgb)
+                img.thumbnail((640, 480), Image.Resampling.LANCZOS)
+                photo = ImageTk.PhotoImage(img)
+                
+                self.camera_canvas.delete("all")
+                self.camera_canvas.create_image(320, 240, image=photo, anchor=tk.CENTER)
+                self.camera_canvas.image = photo
+                
+                # Store current frame
+                self.current_frame = frame
             
-        ret, frame = self.cap.read()
-        if ret:
-            # Flip frame horizontally for mirror effect
-            frame = cv2.flip(frame, 1)
-            
-            # Detect faces
-            faces = self.face_app.get(frame)
-            
-            # Draw face rectangles
-            for face in faces:
-                bbox = face.bbox.astype(int)
-                x1, y1, x2, y2 = bbox
-                cv2.rectangle(frame, (x1, y1), (x2, y2), (0, 255, 0), 2)
-                cv2.putText(frame, "Face Detected", (x1, y1-10), 
-                           cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 2)
-            
-            # Update status
-            if faces:
-                self.status_label.config(text=f"Face detected! Ready to capture.")
-            else:
-                self.status_label.config(text="No face detected. Position your face in the camera.")
-            
-            # Convert to PIL and display
-            frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-            img = Image.fromarray(frame_rgb)
-            img.thumbnail((640, 480), Image.Resampling.LANCZOS)
-            photo = ImageTk.PhotoImage(img)
-            
-            self.camera_canvas.delete("all")
-            self.camera_canvas.create_image(320, 240, image=photo, anchor=tk.CENTER)
-            self.camera_canvas.image = photo
-            
-            # Store current frame
-            self.current_frame = frame
-        
-        if self.running:
-            self.dialog.after(30, self.update_camera)
+            if self.running:
+                self.dialog.after(30, self.update_camera)
+        except Exception as e:
+            logger.error(f"Camera error: {e}")
+            self.status_label.config(text="Error accessing camera.")
+            self.running = False
+            if self.cap:
+                self.cap.release()
     
     def capture_photo(self):
         """Capture current frame"""
@@ -1077,6 +1137,7 @@ class EmployeeManagementDialog:
                         messagebox.showerror("Error", "No face detected in captured image!")
                 except Exception as e:
                     messagebox.showerror("Error", f"Failed to add employee: {str(e)}")
+                    logger.error(f"Error adding employee from camera: {e}")
             
             CameraCaptureDialog(self.dialog, self.employee_manager.face_app, self.config.CAMERA_INDEX, on_capture)
         
@@ -1145,10 +1206,12 @@ class EmployeeManagementDialog:
             try:
                 self.employee_manager.add_employee(emp_id, selected_images)
                 messagebox.showinfo("Success", f"Employee {emp_id} added successfully!")
+                logger.info(f"Added new employee {emp_id} with {len(selected_images)} images")
                 dialog.destroy()
                 self.refresh_employees()
             except Exception as e:
                 messagebox.showerror("Error", f"Failed to add employee: {str(e)}")
+                logger.error(f"Error adding employee from files: {e}")
         
         # Buttons
         btn_frame = Frame(dialog, bg='#1e1e2e')
@@ -1250,6 +1313,7 @@ class EmployeeManagementDialog:
                         messagebox.showerror("Error", "No face detected in captured image!")
                 except Exception as e:
                     messagebox.showerror("Error", f"Failed to add image: {str(e)}")
+                    logger.error(f"Error adding image from camera: {e}")
             
             CameraCaptureDialog(self.dialog, self.employee_manager.face_app, self.config.CAMERA_INDEX, on_capture)
         
@@ -1343,6 +1407,7 @@ class EmployeeManagementDialog:
                                         self.view_employee_details_for_id(emp_id)  # Refresh dialog
                                     except Exception as e:
                                         messagebox.showerror("Error", f"Failed to delete image: {str(e)}")
+                                        logger.error(f"Error deleting image: {e} of employee {emp_id}")
                             
                             tk.Button(img_frame, text="🗑️ Delete", command=delete_image,
                                      bg='#f38ba8', fg='white', font=('Arial', 7)).pack(pady=2)
@@ -1354,6 +1419,7 @@ class EmployeeManagementDialog:
                             
                     except Exception as e:
                         print(f"Error loading image {img_path}: {e}")
+                        logger.error(f"Error loading image {img_path}: {e}")
         else:
             Label(scrollable_frame, text="No images found for this employee",
                   bg='#181825', fg='#a6adc8', font=('Arial', 12)).pack(pady=50)
@@ -1393,6 +1459,7 @@ class EmployeeManagementDialog:
             self.employee_manager.force_reload()
             self.refresh_employees()
             messagebox.showinfo("Success", f"Added {len(files)} images for {emp_id}")
+            logger.info(f"Added {len(files)} images for employee {emp_id}")
     
     def delete_employee(self):
         """Delete employee"""
@@ -1407,8 +1474,10 @@ class EmployeeManagementDialog:
                 self.employee_manager.remove_employee(emp_id)
                 self.refresh_employees()
                 messagebox.showinfo("Success", f"Employee {emp_id} deleted successfully!")
+                logger.info(f"Deleted employee {emp_id}")
             except Exception as e:
                 messagebox.showerror("Error", f"Failed to delete employee: {str(e)}")
+                logger.error(f"Error deleting employee {emp_id}: {e}")
     
     def recreate_embeddings(self):
         """Recreate all embeddings"""
@@ -1417,8 +1486,10 @@ class EmployeeManagementDialog:
                 self.employee_manager.force_reload()
                 self.refresh_employees()
                 messagebox.showinfo("Success", "Embeddings recreated successfully!")
+                logger.info("Recreated all employee embeddings")
             except Exception as e:
                 messagebox.showerror("Error", f"Failed to recreate embeddings: {str(e)}")
+                logger.error(f"Error recreating embeddings: {e}")
 
 class AttendanceUI:
     """Beautiful UI for attendance system"""
@@ -1427,6 +1498,7 @@ class AttendanceUI:
         self.root.title("Real-Time Attendance System")
         self.root.geometry("1400x800")
         self.root.configure(bg='#1e1e2e')
+        self.LAST_UNKNOWN_FACE_SAVED= datetime.now()
         
         # Style configuration
         style = ttk.Style()
@@ -1435,7 +1507,11 @@ class AttendanceUI:
         style.configure('Info.TLabel', background='#1e1e2e', foreground='#a6adc8', font=('Arial', 10))
         
         self.config = AttendanceConfig()
-        self.face_app = FaceAnalysis(allowed_modules=['detection', 'recognition'])
+        self.face_app = FaceAnalysis(
+            name=self.config.MODEL_NAME, 
+            providers=self.config.EXEC_PROVIDER,
+            allowed_modules=self.config.ALLOWED_MODULES
+            )
         self.face_app.prepare(ctx_id=0, det_size=(640, 640))
         
         self.employee_manager = EmployeeManager(self.config, self.face_app)
@@ -1493,7 +1569,7 @@ class AttendanceUI:
         Label(controls_frame, text="Mode:", bg='#313244', fg='#a6adc8').pack(side=tk.LEFT, padx=5)
         self.mode_var = tk.StringVar(value=self.config.MODE)
         mode_menu = ttk.Combobox(controls_frame, textvariable=self.mode_var, 
-                                 values=['per_day', 'per_hour', 'everytime'], width=10)
+                                 values=['per_day', 'per_hour', 'everytime', 'custom'], width=10)
         mode_menu.pack(side=tk.LEFT, padx=5)
         mode_menu.bind('<<ComboboxSelected>>', self.change_mode)
         
@@ -1589,9 +1665,11 @@ class AttendanceUI:
                 self.employee_manager.force_reload()
                 self.status_label.config(text="Embeddings recreated successfully")
                 messagebox.showinfo("Success", "Embeddings recreated successfully!")
+                logger.info("Recreated all employee embeddings")
             except Exception as e:
                 self.status_label.config(text="Error recreating embeddings")
                 messagebox.showerror("Error", f"Failed to recreate embeddings: {str(e)}")
+                logger.error(f"Error recreating embeddings: {e}")
     
     def restart_application(self):
         """Restart the application"""
@@ -1636,6 +1714,7 @@ class AttendanceUI:
                     f"Failed to restart application: {str(e)}\n\n"
                     "Please restart manually to apply all changes."
                 )
+                logger.error(f"Error restarting application: {e}")
     
     def view_attendance_log(self):
         """View attendance log"""
@@ -1685,6 +1764,9 @@ System Status Report
 
 Configuration:
 - Mode: {self.config.MODE}
+- Model: {self.config.MODEL_NAME}
+- Execution Provider: {', '.join(self.config.EXEC_PROVIDER)}
+- Allowed Modules: {', '.join(self.config.ALLOWED_MODULES)}
 - Similarity Threshold: {self.config.SIMILARITY_THRESHOLD}
 - Camera: {self.config.CAMERA_INDEX}
 - Detection Confidence: {self.config.DETECTION_CONFIDENCE}
@@ -1697,6 +1779,7 @@ Directories:
 - Employees Dir: {self.config.EMPLOYEES_DIR}
 - Unknown Dir: {self.config.UNKNOWN_DIR}
 - Unknown Logging: {'Enabled' if self.config.UNKNOWN_FACE_LOGGING else 'Disabled'}
+- Unknown Max Photo: {self.config.MAX_UNKNOWN_FACES}
 
 Notifications:
 - API Enabled: {'Yes' if self.config.ENABLE_API else 'No'}
@@ -1724,7 +1807,7 @@ System:
             "- Unknown face logging\n"
             "- API/MQTT notifications\n"
             "- Configurable settings\n\n"
-            "Built with OpenCV, InsightFace, and Tkinter"
+            "Built by almamunb72@gmail.com"
         )
     
     def change_mode(self, event=None):
@@ -1732,12 +1815,14 @@ System:
         self.config.MODE = self.mode_var.get()
         self.config.save_config()
         self.status_label.config(text=f"Mode changed to: {self.config.MODE}")
+        logger.info(f"Attendance mode changed to: {self.config.MODE}")
     
     def clear_history(self):
         """Clear match history display"""
         for widget in self.match_widgets:
             widget.destroy()
         self.match_widgets.clear()
+        logger.info("Cleared attendance history display")
     
     def video_capture_thread(self):
         """Thread for capturing video frames"""
@@ -1806,24 +1891,51 @@ System:
                     })
                 else:
                     # Save unknown face if logging enabled
-                    if self.config.UNKNOWN_FACE_LOGGING:
-                        x1, y1, x2, y2 = bbox
-                        face_img = frame[max(0, y1):min(frame.shape[0], y2), 
-                                        max(0, x1):min(frame.shape[1], x2)]
-                        
-                        if not os.path.exists(self.config.UNKNOWN_DIR):
-                            os.makedirs(self.config.UNKNOWN_DIR)
-                        
-                        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S_%f")
-                        unknown_path = os.path.join(self.config.UNKNOWN_DIR, f"{timestamp}.jpg")
-                        cv2.imwrite(unknown_path, face_img)
-                        
-                        results.append({
-                            'bbox': bbox,
-                            'match': None,
-                            'face_img': face_img,
-                            'timestamp': datetime.now()
-                        })
+                    if self.config.UNKNOWN_FACE_LOGGING and \
+                        datetime.now() - self.LAST_UNKNOWN_FACE_SAVED > timedelta(seconds=self.config.MAX_UNKNOWN_SAVE_INTERVAL):
+                        try:
+                            x1, y1, x2, y2 = bbox
+                            
+                            if self.config.UNKNOWN_FULL_IMAGE:
+                                face_img = frame
+                            else:
+                                face_img = frame[max(0, y1):min(frame.shape[0], y2), 
+                                                max(0, x1):min(frame.shape[1], x2)]
+                            
+                            if not os.path.exists(self.config.UNKNOWN_DIR):
+                                os.makedirs(self.config.UNKNOWN_DIR)
+
+                            # Enforce max photo count
+                            existing_photos = sorted(
+                                [os.path.join(self.config.UNKNOWN_DIR, f) 
+                                for f in os.listdir(self.config.UNKNOWN_DIR) 
+                                if f.lower().endswith(('.jpg', '.jpeg', '.png'))],
+                                key=os.path.getctime  # sort by creation time
+                            )
+
+                            # Delete oldest files if exceeding limit
+                            max_photos = self.config.MAX_UNKNOWN_FACES
+                            if len(existing_photos) >= max_photos:
+                                files_to_delete = existing_photos[:len(existing_photos) - max_photos + 1]
+                                for old_file in files_to_delete:
+                                    try:
+                                        os.remove(old_file)
+                                    except Exception as e:
+                                        print(f"Failed to delete {old_file}: {e}")
+                            
+                            self.LAST_UNKNOWN_FACE_SAVED = datetime.now()
+                            timestamp = self.LAST_UNKNOWN_FACE_SAVED.strftime("%Y%m%d_%H%M_%f")
+                            unknown_path = os.path.join(self.config.UNKNOWN_DIR, f"{timestamp}.jpg")
+                            cv2.imwrite(unknown_path, face_img)
+                            logger.info(f"Saved unknown face to {unknown_path} at {timestamp}")
+                            results.append({
+                                'bbox': bbox,
+                                'match': None,
+                                'face_img': face_img,
+                                'timestamp': datetime.now()
+                            })
+                        except Exception as e:
+                            logger.error(f"Error saving unknown face: {e}")
             
             # Send results to UI
             try:

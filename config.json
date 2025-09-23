@@ -1,16 +1,30 @@
 {
+  "ALLOWED_MODULES": [
+    "detection",
+    "recognition"
+  ],
   "API_ENDPOINT": "",
   "API_KEY": "",
   "ATTENDANCE_LOG": "attendance_log.json",
   "CAMERA_INDEX": 0,
   "CONFIG_FILE": "config.json",
+  "CUSTOM_MODE_INTERVAL_IN_SEC": 3,
   "DETECTION_CONFIDENCE": 0.5,
   "EMBEDDINGS_CACHE": "embeddings_cache.pkl",
   "EMPLOYEES_DIR": "employees",
   "ENABLE_API": false,
-  "ENABLE_MQTT": true,
+  "ENABLE_LOGGING": true,
+  "ENABLE_MQTT": false,
+  "EXEC_PROVIDER": [
+    "CPUExecutionProvider"
+  ],
+  "LOG_LEVEL": "INFO",
   "MAX_FACE_SIZE": 512,
-  "MODE": "everytime",
+  "MAX_UNKNOWN_FACES": 2,
+  "MAX_UNKNOWN_SAVE_INTERVAL": 10,
+  "MODE": "per_hour",
+  "MODEL_NAME": "buffalo_sc",
+  "MODEL_PATH": "",
   "MQTT_BROKER": "127.0.0.1",
   "MQTT_PASSWORD": "",
   "MQTT_PORT": 1883,
@@ -18,5 +32,6 @@
   "MQTT_USERNAME": "",
   "SIMILARITY_THRESHOLD": 0.4,
   "UNKNOWN_DIR": "unknown_faces",
-  "UNKNOWN_FACE_LOGGING": true
+  "UNKNOWN_FACE_LOGGING": true,
+  "UNKNOWN_FULL_IMAGE": true
 }
