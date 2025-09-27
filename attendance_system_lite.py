@@ -17,8 +17,8 @@ import dotenv
 # Load environment variables from .env file
 dotenv.load_dotenv()
 
-API_ENDPOINT = "http://127.0.0.1:8000/incident"
-EMPLOYEES_DIR = "employees"
+API_ENDPOINT = os.getenv("API_ENDPOINT", "http://localhost:8000/incident")
+EMPLOYEES_DIR = os.getenv("EMPLOYESS_DIR", "employees")
 SIMILARITY_THRESHOLD = float(os.getenv("SIMILARITY_THRESHOLD", 0.5))
 MODEL_PATH = os.getenv("MODEL_PATH", "models/buffalo_sc")
 
@@ -28,7 +28,7 @@ face_app = FaceAnalysis(
             providers= [os.getenv("EXEC_PROVIDER")],
             model_path= MODEL_PATH
             )
-face_app.prepare(ctx_id=0, det_size=(800, 800))
+face_app.prepare(ctx_id=0, det_size=(640, 640))
 
 # Load employee embeddings
 employee_embeddings = {}
